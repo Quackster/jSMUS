@@ -1,0 +1,43 @@
+plugins {
+    id "java-library"
+    id "application"
+    id "maven-publish"
+}
+
+group = System.getenv("GROUP") ?: "com.github.Quackster"
+version = System.getenv("VERSION") ?: "0.1.0"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withJavadocJar()
+    withSourcesJar()
+}
+
+application {
+    mainClass = "io.github.bitpart.smus.SmusServerMain"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = 21
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
+
+dependencies {
+    testImplementation platform("org.junit:junit-bom:5.10.3")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifactId = System.getenv("ARTIFACT") ?: "jSMUS"
+            from components.java
+        }
+    }
+}
