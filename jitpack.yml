@@ -2,4 +2,4 @@ jdk:
   - openjdk21
 
 install:
-  - gradle clean publishToMavenLocal -x test
+  - ./gradlew clean publishToMavenLocal -x test
