@@ -7,7 +7,7 @@ It includes:
 - Lingo binary value encoding and decoding
 - SMUS packet framing
 - Adobe-compatible Blowfish transform for encrypted login packets
-- A virtual-threaded embedded SMUS server
+- A Netty-based embedded SMUS server
 - A small CLI server launcher
 
 ## Requirements
@@ -35,8 +35,8 @@ The first argument is the port. The second argument is the SMUS encryption key u
 ## Use As A Library
 
 ```java
-import io.github.bitpart.smus.SmusServer;
-import io.github.bitpart.smus.SmusServerConfig;
+import io.github.bitpart.smus.server.SmusServer;
+import io.github.bitpart.smus.server.SmusServerConfig;
 
 public final class Main {
     public static void main(String[] args) throws Exception {
@@ -53,14 +53,18 @@ public final class Main {
 Listen for server events:
 
 ```java
+import io.github.bitpart.smus.protocol.SmusMessage;
+import io.github.bitpart.smus.server.SmusServerListener;
+import io.github.bitpart.smus.server.User;
+
 var server = new SmusServer(config, new SmusServerListener() {
     @Override
-    public void onLogon(SmusServer.User user) {
+    public void onLogon(User user) {
         System.out.println(user.name() + " joined " + user.movie());
     }
 
     @Override
-    public void onMessage(SmusServer.User sender, SmusMessage message) {
+    public void onMessage(User sender, SmusMessage message) {
         System.out.println(sender.name() + ": " + message.subject());
     }
 });
@@ -69,6 +73,11 @@ var server = new SmusServer(config, new SmusServerListener() {
 Encode Lingo values and SMUS messages:
 
 ```java
+import io.github.bitpart.smus.protocol.LValue;
+import io.github.bitpart.smus.protocol.LingoCodec;
+import io.github.bitpart.smus.protocol.SmusCodec;
+import io.github.bitpart.smus.protocol.SmusMessage;
+
 byte[] content = LingoCodec.encode(new LValue.StringValue("hello"));
 SmusMessage message = SmusMessage.of("System", List.of("SomeUser"), "Greeting", content);
 byte[] frame = SmusCodec.pack(message);
@@ -107,18 +116,19 @@ If the GitHub repository name changes, replace `jSMUS` in the dependency coordin
 
 ## Published API
 
-The Java module is `io.github.bitpart.smus` and exports `io.github.bitpart.smus`.
+The Java module is `io.github.bitpart.smus`. The public API is split across `io.github.bitpart.smus.server`, `io.github.bitpart.smus.protocol`, and `io.github.bitpart.smus.crypto`.
 
 Primary classes:
 
-- `SmusServer`
-- `SmusServerConfig`
-- `SmusServerListener`
-- `SmusMessage`
-- `SmusCodec`
-- `LValue`
-- `LingoCodec`
-- `SmusBlowfish`
+- `server.SmusServer`
+- `server.SmusServerConfig`
+- `server.SmusServerListener`
+- `server.User`
+- `protocol.SmusMessage`
+- `protocol.SmusCodec`
+- `protocol.LValue`
+- `protocol.LingoCodec`
+- `crypto.SmusBlowfish`
 
 ## License
 

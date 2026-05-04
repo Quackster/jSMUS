@@ -1,25 +1,26 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.server;
 
-import java.io.EOFException;
+import io.github.bitpart.smus.crypto.SmusBlowfish;
+import io.github.bitpart.smus.protocol.LValue;
+import io.github.bitpart.smus.protocol.LingoCodec;
+import io.github.bitpart.smus.protocol.SmusMessage;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class SmusServer implements AutoCloseable {
@@ -28,11 +29,12 @@ public final class SmusServer implements AutoCloseable {
     private final SmusServerConfig config;
     private final SmusServerListener listener;
     private final SmusBlowfish.KeySchedule loginKey;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicBoolean running = new AtomicBoolean();
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, User> usersBySession = new ConcurrentHashMap<>();
-    private volatile ServerSocket serverSocket;
+    private final MultiThreadIoEventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+    private final MultiThreadIoEventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
+    private volatile Channel serverChannel;
 
     public SmusServer(SmusServerConfig config) {
         this(config, new SmusServerListener() {});
@@ -48,9 +50,27 @@ public final class SmusServer implements AutoCloseable {
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        serverSocket = new ServerSocket();
-        serverSocket.bind(new InetSocketAddress(config.bindAddress(), config.port()));
-        executor.submit(this::acceptLoop);
+        try {
+            ChannelFuture bind = new ServerBootstrap()
+                    .group(bossGroup, workerGroup)
+                    .channelFactory(NioServerSocketChannel::new)
+                    .childHandler(new SmusChannelInitializer(this, config.maxFrameBytes()))
+                    .childOption(ChannelOption.TCP_NODELAY, true)
+                    .bind(new InetSocketAddress(config.bindAddress(), config.port()))
+                    .sync();
+            serverChannel = bind.channel();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            running.set(false);
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+            throw new IOException("Interrupted while starting SMUS server", e);
+        } catch (RuntimeException e) {
+            running.set(false);
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+            throw e;
+        }
     }
 
     public List<User> users() {
@@ -71,34 +91,15 @@ public final class SmusServer implements AutoCloseable {
     @Override
     public void close() {
         running.set(false);
-        try {
-            if (serverSocket != null) {
-                serverSocket.close();
-            }
-        } catch (IOException e) {
-            listener.onError(e);
+        if (serverChannel != null) {
+            serverChannel.close().syncUninterruptibly();
         }
         sessions.values().forEach(Session::close);
-        executor.close();
+        bossGroup.shutdownGracefully().syncUninterruptibly();
+        workerGroup.shutdownGracefully().syncUninterruptibly();
     }
 
-    private void acceptLoop() {
-        while (running.get()) {
-            try {
-                Socket socket = serverSocket.accept();
-                socket.setTcpNoDelay(true);
-                Session session = new Session(socket);
-                sessions.put(session.id, session);
-                executor.submit(session::readLoop);
-            } catch (IOException e) {
-                if (running.get()) {
-                    listener.onError(e);
-                }
-            }
-        }
-    }
-
-    private void handle(Session session, SmusMessage message) {
+    void handle(Session session, SmusMessage message) {
         if (!session.authenticated) {
             handleLogon(session, message);
             return;
@@ -119,6 +120,34 @@ public final class SmusServer implements AutoCloseable {
         routeUserMessage(sender, message);
     }
 
+    void addSession(Session session) {
+        sessions.put(session.id, session);
+    }
+
+    void removeSession(Session session) {
+        sessions.remove(session.id);
+        User user = usersBySession.remove(session.id);
+        if (user != null) {
+            listener.onLogout(user);
+        }
+    }
+
+    boolean isRunning() {
+        return running.get();
+    }
+
+    SmusBlowfish.KeySchedule loginKey() {
+        return loginKey;
+    }
+
+    String encryptionKey() {
+        return config.encryptionKey();
+    }
+
+    SmusServerListener listener() {
+        return listener;
+    }
+
     private void handleLogon(Session session, SmusMessage message) {
         LValue content = LingoCodec.decode(message.content());
         Login login = Login.from(content).orElseThrow(() -> new IllegalArgumentException("Logon content must be a list or property list"));
@@ -128,10 +157,7 @@ public final class SmusServer implements AutoCloseable {
                 .findFirst()
                 .orElse(null);
         if (existingSession != null) {
-            Session existing = sessions.get(existingSession);
-            if (existing != null) {
-                existing.close();
-            }
+            Optional.ofNullable(sessions.get(existingSession)).ifPresent(Session::close);
         }
         session.authenticated = true;
         session.protocolMajor = login.protocolMajor();
@@ -275,171 +301,5 @@ public final class SmusServer implements AutoCloseable {
         }
         boolean orderedProtocol = session.protocolMajor > 1 || (session.protocolMajor == 1 && session.protocolMinor > 0);
         return hashOk && (!orderedProtocol || session.checkOrder(order));
-    }
-
-    public record User(String name, String movie, Set<String> groups, String sessionId) {
-        public User {
-            groups = Set.copyOf(groups);
-        }
-
-        Set<String> groupsPlus(String group) {
-            var copy = ConcurrentHashMap.<String>newKeySet();
-            copy.addAll(groups);
-            copy.add(group.startsWith("@") ? group : "@" + group);
-            return copy;
-        }
-
-        Set<String> groupsMinus(String group) {
-            String normalized = group.startsWith("@") ? group : "@" + group;
-            var copy = ConcurrentHashMap.<String>newKeySet();
-            groups.stream().filter(existing -> !existing.equalsIgnoreCase(normalized)).forEach(copy::add);
-            return copy;
-        }
-    }
-
-    private record Recipient(String name, Optional<String> movie) {
-        static Recipient parse(String value) {
-            String[] parts = (value + "@").split("@", -1);
-            String name = parts.length > 0 ? parts[0] : "";
-            Optional<String> movie = parts.length > 1 && !parts[1].isEmpty() ? Optional.of(parts[1]) : Optional.empty();
-            if (name.isEmpty() && movie.isPresent()) {
-                name = "@" + movie.orElseThrow();
-                movie = Optional.empty();
-            }
-            return new Recipient(name, movie);
-        }
-    }
-
-    private record Login(String movieId, String userId, int protocolMajor, int protocolMinor, int clientMajor, int clientMinor) {
-        static Optional<Login> from(LValue value) {
-            if (value instanceof LValue.ListValue list && list.values().size() >= 3
-                    && list.values().get(0) instanceof LValue.StringValue movie
-                    && list.values().get(1) instanceof LValue.StringValue user
-                    && list.values().get(2) instanceof LValue.StringValue password) {
-                int[] versions = versions(password.value());
-                return Optional.of(new Login(movie.value(), user.value(), versions[0], versions[1], versions[2], versions[3]));
-            }
-            if (value instanceof LValue.PropertyList propertyList) {
-                Map<String, LValue> values = propertyList.properties().stream()
-                        .collect(java.util.stream.Collectors.toMap(p -> p.name().toLowerCase(Locale.ROOT), LValue.Property::value, (a, b) -> a));
-                if (values.get("movieid") instanceof LValue.StringValue movie
-                        && values.get("userid") instanceof LValue.StringValue user
-                        && values.get("password") instanceof LValue.StringValue password) {
-                    int[] versions = versions(password.value());
-                    return Optional.of(new Login(movie.value(), user.value(), versions[0], versions[1], versions[2], versions[3]));
-                }
-            }
-            return Optional.empty();
-        }
-
-        private static int[] versions(String password) {
-            String[] parts = password.split("[,.]");
-            if (parts.length == 4) {
-                try {
-                    return new int[] {
-                            Integer.parseInt(parts[0]), Integer.parseInt(parts[1]),
-                            Integer.parseInt(parts[2]), Integer.parseInt(parts[3])
-                    };
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            return new int[] {1, 0, 2, 142};
-        }
-    }
-
-    private final class Session {
-        private final Socket socket;
-        private final String id = HexFormat.of().formatHex(UUID.randomUUID().toString().getBytes()).substring(0, 24);
-        private final int[] lastMessages = new int[100];
-        private volatile boolean authenticated;
-        private volatile int protocolMajor;
-        private volatile int protocolMinor;
-        private volatile int clientMajor;
-        private volatile int clientMinor;
-        private volatile int messageHashIndex = -1;
-        private volatile byte[] messageHash = new byte[0];
-
-        private Session(Socket socket) {
-            this.socket = socket;
-        }
-
-        private void readLoop() {
-            try (socket) {
-                while (running.get() && !socket.isClosed()) {
-                    byte[] header = socket.getInputStream().readNBytes(SmusCodec.HEADER_SIZE);
-                    if (header.length == 0) {
-                        break;
-                    }
-                    if (header.length != SmusCodec.HEADER_SIZE) {
-                        throw new EOFException("Incomplete SMUS header");
-                    }
-                    int frameLength = SmusCodec.frameLength(header);
-                    if (frameLength > config.maxFrameBytes()) {
-                        throw new IOException("SMUS frame exceeds maxFrameBytes");
-                    }
-                    byte[] body = socket.getInputStream().readNBytes(frameLength);
-                    if (body.length != frameLength) {
-                        throw new EOFException("Incomplete SMUS body");
-                    }
-                    handle(this, SmusCodec.unpack(body, authenticated ? null : loginKey));
-                }
-            } catch (Throwable e) {
-                if (running.get()) {
-                    listener.onError(e);
-                }
-            } finally {
-                removeSession(this);
-            }
-        }
-
-        private synchronized void send(SmusMessage message) {
-            try {
-                socket.getOutputStream().write(SmusCodec.pack(message));
-                socket.getOutputStream().flush();
-            } catch (IOException e) {
-                close();
-            }
-        }
-
-        private void close() {
-            try {
-                socket.close();
-            } catch (IOException e) {
-                listener.onError(e);
-            }
-        }
-
-        private boolean checkOrder(int messageId) {
-            int index = Math.floorMod(messageId, lastMessages.length);
-            int previous = lastMessages[index];
-            if (previous == messageId || previous > messageId) {
-                return false;
-            }
-            lastMessages[index] = messageId;
-            return true;
-        }
-
-        private int expectedHash(int order) {
-            int block = Math.floorDiv(order, 16);
-            int index = Math.floorMod(order, 16);
-            if (messageHashIndex != block) {
-                try {
-                    MessageDigest md5 = MessageDigest.getInstance("MD5");
-                    messageHash = md5.digest((config.encryptionKey() + id + block).getBytes(Binary.LINGO_CHARSET));
-                    messageHashIndex = block;
-                } catch (NoSuchAlgorithmException e) {
-                    throw new IllegalStateException(e);
-                }
-            }
-            return messageHash[index] & 0xff;
-        }
-    }
-
-    private void removeSession(Session session) {
-        sessions.remove(session.id);
-        User user = usersBySession.remove(session.id);
-        if (user != null) {
-            listener.onLogout(user);
-        }
     }
 }

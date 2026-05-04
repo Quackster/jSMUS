@@ -1,4 +1,4 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.crypto;
 
 final class BlowfishTables {
     private BlowfishTables() {}

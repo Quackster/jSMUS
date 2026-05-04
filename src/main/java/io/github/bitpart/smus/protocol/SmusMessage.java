@@ -1,4 +1,4 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.protocol;
 
 import java.util.Arrays;
 import java.util.List;

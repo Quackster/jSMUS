@@ -1,11 +1,13 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.protocol;
+
+import io.github.bitpart.smus.crypto.SmusBlowfish;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import static io.github.bitpart.smus.Binary.*;
+import static io.github.bitpart.smus.protocol.Binary.*;
 
 public final class SmusCodec {
     public static final int HEADER_SIZE = 6;

@@ -1,5 +1,6 @@
 package io.github.bitpart.smus;
 
+import io.github.bitpart.smus.crypto.SmusBlowfish;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

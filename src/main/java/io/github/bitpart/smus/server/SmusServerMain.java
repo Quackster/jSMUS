@@ -1,4 +1,4 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.server;
 
 import java.util.concurrent.CountDownLatch;
 

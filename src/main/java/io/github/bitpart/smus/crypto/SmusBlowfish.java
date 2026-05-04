@@ -1,8 +1,8 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.crypto;
 
 import java.util.Arrays;
 
-import static io.github.bitpart.smus.Binary.LINGO_CHARSET;
+import java.nio.charset.StandardCharsets;
 
 public final class SmusBlowfish {
     private static final int PBOX_ENTRIES = 18;
@@ -12,7 +12,7 @@ public final class SmusBlowfish {
     }
 
     public static KeySchedule keySchedule(String key) {
-        return keySchedule(key.getBytes(LINGO_CHARSET));
+        return keySchedule(key.getBytes(StandardCharsets.ISO_8859_1));
     }
 
     public static KeySchedule keySchedule(byte[] key) {

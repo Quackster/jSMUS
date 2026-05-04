@@ -16,7 +16,7 @@ java {
 }
 
 application {
-    mainClass = "io.github.bitpart.smus.SmusServerMain"
+    mainClass = "io.github.bitpart.smus.server.SmusServerMain"
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -29,6 +29,10 @@ tasks.withType(Test).configureEach {
 }
 
 dependencies {
+    implementation platform("io.netty:netty-bom:4.2.12.Final")
+    implementation "io.netty:netty-codec"
+    implementation "io.netty:netty-transport"
+
     testImplementation platform("org.junit:junit-bom:5.10.3")
     testImplementation "org.junit.jupiter:junit-jupiter"
 }

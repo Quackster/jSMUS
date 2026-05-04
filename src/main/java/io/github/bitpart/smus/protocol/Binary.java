@@ -1,4 +1,4 @@
-package io.github.bitpart.smus;
+package io.github.bitpart.smus.protocol;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;

@@ -1,5 +1,9 @@
 package io.github.bitpart.smus;
 
+import io.github.bitpart.smus.protocol.LValue;
+import io.github.bitpart.smus.protocol.LingoCodec;
+import io.github.bitpart.smus.protocol.SmusCodec;
+import io.github.bitpart.smus.protocol.SmusMessage;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
